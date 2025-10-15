@@ -58,12 +58,14 @@ jobs:
         run: |
           set -e
           cd dist
-          # Flatten: move artifacts out of subdirectories
-          find . -mindepth 2 -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec mv {} . \;
+          # Flatten: move artifacts out of subdirectories (actions/download-artifact@v4 creates subdirs)
+          find . -mindepth 2 -type f \( -name "*.tar.gz" -o -name "*.zip" \) | while read -r file; do
+            mv "$file" .
+          done
           # Remove empty artifact directories
-          find . -mindepth 1 -type d -exec rm -rf {} + 2>/dev/null || true
+          find . -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} +
           # Compute checksums (files are now at top level)
-          sha256sum *.tar.gz *.zip > SHA256SUMS.txt
+          sha256sum *.tar.gz *.zip 2>/dev/null > SHA256SUMS.txt || true
           cd -
 
       - name: Create GitHub Release
