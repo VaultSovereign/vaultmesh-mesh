@@ -1,0 +1,18 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ['--maxkb=2048']  # 2 MB cap
+
+  - repo: local
+    hooks:
+      - id: deny-archives
+        name: Deny compressed archives in repo
+        entry: bash scripts/precommit/deny-archives.sh
+        language: system
+        types: [file]
+        files: '.*\.(zip|tar|tgz|gz|xz|7z)$'
