@@ -58,16 +58,19 @@ jobs:
         run: |
           set -e
           cd dist
-          find . -type f \( -name "*.tar.gz" -o -name "*.zip" \) -print0 | xargs -0 sha256sum > SHA256SUMS.txt
+          # Flatten: move artifacts out of subdirectories
+          find . -mindepth 2 -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec mv {} . \;
+          # Remove empty artifact directories
+          find . -mindepth 1 -type d -exec rm -rf {} + 2>/dev/null || true
+          # Compute checksums (files are now at top level)
+          sha256sum *.tar.gz *.zip > SHA256SUMS.txt
           cd -
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            dist/**/*
-            dist/SHA256SUMS.txt
+          files: dist/*
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
