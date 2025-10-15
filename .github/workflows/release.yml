@@ -1,0 +1,73 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14, windows-2022]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build (release)
+        shell: bash
+        run: cargo build --release --locked
+
+      - name: Package binary
+        shell: bash
+        run: |
+          set -e
+          BIN="target/release/vaultmesh"
+          NAME="vaultmesh"
+          VER="${GITHUB_REF_NAME#v}"
+          OS="${{ matrix.os }}"
+          case "$OS" in
+            windows-*)  BIN="${BIN}.exe"; ASSET="${NAME}-${VER}-windows-x86_64.zip"; 7z a "$ASSET" "$BIN" >/dev/null ;;
+            macos-*)    ASSET="${NAME}-${VER}-macos-universal.tar.gz"; tar -czf "$ASSET" -C "$(dirname "$BIN")" "$(basename "$BIN")" ;;
+            ubuntu-*)   ASSET="${NAME}-${VER}-linux-x86_64.tar.gz";   tar -czf "$ASSET" -C "$(dirname "$BIN")" "$(basename "$BIN")" ;;
+          esac
+          echo "ASSET=$ASSET" >> $GITHUB_ENV
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ASSET }}
+          path: ${{ env.ASSET }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Compute checksums
+        run: |
+          set -e
+          cd dist
+          find . -type f \( -name "*.tar.gz" -o -name "*.zip" \) -print0 | xargs -0 sha256sum > SHA256SUMS.txt
+          cd -
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/**/*
+            dist/SHA256SUMS.txt
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
