@@ -1,3 +1,8 @@
 /target
 **/*.rs.bk
 
+# VaultMesh mesh (CLI) — transient artifacts
+/target/
+/rec*.json
+/receipts/
+*.zip
