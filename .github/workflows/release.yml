@@ -59,17 +59,20 @@ jobs:
           set -e
           cd dist
           # Flatten: actions/download-artifact@v4 creates subdirs named after artifact
-          # Each subdir contains a file with the same name
+          # Structure is: artifact-name/artifact-name (dir/file with same name)
           for dir in */; do
             dir_name="${dir%/}"
-            # Move the file out, renaming during move to avoid conflicts
-            if [ -f "$dir/$dir_name" ]; then
-              mv "$dir/$dir_name" "./${dir_name}"
-            fi
+            # Find any tar.gz or zip file in this directory
+            for file in "$dir"*.{tar.gz,zip}; do
+              if [ -f "$file" ]; then
+                # Move to parent, using basename to avoid path issues
+                mv "$file" "./$(basename "$file")"
+              fi
+            done
           done
-          # Remove artifact directories
+          # Remove now-empty artifact directories
           rm -rf */
-          # Compute checksums
+          # Compute checksums (files are now at top level)
           sha256sum *.tar.gz *.zip > SHA256SUMS.txt
           cd -
 
