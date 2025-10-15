@@ -58,16 +58,18 @@ jobs:
         run: |
           set -e
           cd dist
-          # Flatten: move artifacts out of subdirectories (actions/download-artifact@v4 creates subdirs)
-          for artifact_dir in */; do
-            if [ -d "$artifact_dir" ]; then
-              # Find the actual file inside the directory
-              find "$artifact_dir" -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec mv {} . \;
+          # Flatten: actions/download-artifact@v4 creates subdirs named after artifact
+          # Each subdir contains a file with the same name
+          for dir in */; do
+            dir_name="${dir%/}"
+            # Move the file out, renaming during move to avoid conflicts
+            if [ -f "$dir/$dir_name" ]; then
+              mv "$dir/$dir_name" "./${dir_name}"
             fi
           done
-          # Remove now-empty artifact directories
-          find . -mindepth 1 -maxdepth 1 -type d -exec rmdir {} \; 2>/dev/null || true
-          # Compute checksums (files are now at top level)
+          # Remove artifact directories
+          rm -rf */
+          # Compute checksums
           sha256sum *.tar.gz *.zip > SHA256SUMS.txt
           cd -
 
