@@ -1,0 +1,14 @@
+/Users/sovereign/work/vaultmesh/vaultmesh-mesh/target/release/deps/serde-b0824d1ca7d19bc5.d: /Users/sovereign/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /Users/sovereign/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /Users/sovereign/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /Users/sovereign/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /Users/sovereign/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /Users/sovereign/work/vaultmesh/vaultmesh-mesh/target/release/build/serde-4135d59f04efbdca/out/private.rs
+
+/Users/sovereign/work/vaultmesh/vaultmesh-mesh/target/release/deps/libserde-b0824d1ca7d19bc5.rlib: /Users/sovereign/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /Users/sovereign/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /Users/sovereign/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /Users/sovereign/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /Users/sovereign/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /Users/sovereign/work/vaultmesh/vaultmesh-mesh/target/release/build/serde-4135d59f04efbdca/out/private.rs
+
+/Users/sovereign/work/vaultmesh/vaultmesh-mesh/target/release/deps/libserde-b0824d1ca7d19bc5.rmeta: /Users/sovereign/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /Users/sovereign/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /Users/sovereign/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /Users/sovereign/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /Users/sovereign/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /Users/sovereign/work/vaultmesh/vaultmesh-mesh/target/release/build/serde-4135d59f04efbdca/out/private.rs
+
+/Users/sovereign/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs:
+/Users/sovereign/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs:
+/Users/sovereign/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs:
+/Users/sovereign/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs:
+/Users/sovereign/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs:
+/Users/sovereign/work/vaultmesh/vaultmesh-mesh/target/release/build/serde-4135d59f04efbdca/out/private.rs:
+
+# env-dep:OUT_DIR=/Users/sovereign/work/vaultmesh/vaultmesh-mesh/target/release/build/serde-4135d59f04efbdca/out
