@@ -30,6 +30,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: KeysCmd
     },
+    /// Compute BLAKE3 hash of a file
+    Hash {
+        #[command(subcommand)]
+        cmd: HashCmd
+    },
     /// Build a daily Merkle root from receipts in a directory
     Seal {
         /// Date (YYYY-MM-DD)
@@ -90,6 +95,15 @@ enum KeysCmd {
         /// Output path for key JSON
         #[arg(long)]
         out: String,
+    }
+}
+
+#[derive(Subcommand)]
+enum HashCmd {
+    /// Compute BLAKE3 hash of a file (hex)
+    File {
+        #[arg(long)]
+        file: String
     }
 }
 
@@ -300,7 +314,7 @@ fn main() -> Result<()> {
             KeysCmd::Generate { out } => {
                 // generate from OS randomness without full rand crate
                 let mut seed = [0u8; 32];
-                getrandom::getrandom(&mut seed)?;
+                getrandom::getrandom(&mut seed).map_err(|e| anyhow!("getrandom error: {}", e))?;
                 let secret = SecretKey::from_bytes(&seed).map_err(|e| anyhow!("secret key error: {}", e))?;
                 let public = PublicKey::from(&secret);
                 let kp = Keypair { secret, public };
@@ -311,6 +325,12 @@ fn main() -> Result<()> {
                 });
                 write(&out, &serde_json::to_string_pretty(&key_json)?)?;
                 println!("KEY WRITTEN {}", out);
+            }
+        },
+        Cmd::Hash { cmd } => match cmd {
+            HashCmd::File { file } => {
+                let bytes = read(&file)?;
+                println!("{}", blake3_hex(&bytes));
             }
         },
         Cmd::Seal { date, dir, out } => {
