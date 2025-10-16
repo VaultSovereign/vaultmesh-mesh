@@ -1,21 +1,32 @@
+// Legacy CLI plumbing has a few benign pedantic hits we’ll resolve incrementally.
+// Scope the allows to this file only—core libs remain strict.
+#![allow(clippy::similar_names, clippy::uninlined_format_args)]
+
+mod env_meta;
+mod identity;
+mod receipt;
+
+use crate::env_meta::collect_env_metadata;
+use crate::identity::resolve_actor_did;
 use anyhow::{anyhow, Result};
+use base64::{engine::general_purpose, Engine as _};
 use blake3::Hasher;
-use clap::{Parser, Subcommand};
+use chrono::Utc;
+use clap::{Parser, Subcommand, ValueEnum};
+use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signature, Signer, Verifier};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use chrono::Utc;
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
-use std::path::Path;
-use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signature, Signer, Verifier};
-use base64::{engine::general_purpose, Engine as _};
 
 #[derive(Parser)]
-#[command(name="vaultmesh")]
-#[command(about="VaultMesh CLI — receipts, Merkle, verification")]
+#[command(
+    name = "vaultmesh",
+    about = "VaultMesh CLI — receipts, Merkle, verification"
+)]
 struct Cli {
     #[command(subcommand)]
-    cmd: Cmd
+    cmd: Cmd,
 }
 
 #[derive(Subcommand)]
@@ -23,17 +34,17 @@ enum Cmd {
     /// Receipt operations
     Receipt {
         #[command(subcommand)]
-        cmd: ReceiptCmd
+        cmd: ReceiptCmd,
     },
     /// Generate an ed25519 keypair and write JSON
     Keys {
         #[command(subcommand)]
-        cmd: KeysCmd
+        cmd: KeysCmd,
     },
     /// Compute BLAKE3 hash of a file
     Hash {
         #[command(subcommand)]
-        cmd: HashCmd
+        cmd: HashCmd,
     },
     /// Build a daily Merkle root from receipts in a directory
     Seal {
@@ -85,7 +96,12 @@ enum Cmd {
         /// Perform extra checks (capability present, approvals exist)
         #[arg(long, default_value_t = false)]
         strict: bool,
-    }
+    },
+    /// Glue receipts: identity+env+signature
+    Glue {
+        #[command(subcommand)]
+        cmd: GlueCmd,
+    },
 }
 
 #[derive(Subcommand)]
@@ -95,7 +111,7 @@ enum KeysCmd {
         /// Output path for key JSON
         #[arg(long)]
         out: String,
-    }
+    },
 }
 
 #[derive(Subcommand)]
@@ -103,8 +119,48 @@ enum HashCmd {
     /// Compute BLAKE3 hash of a file (hex)
     File {
         #[arg(long)]
-        file: String
-    }
+        file: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum GlueCmd {
+    /// Emit a minimal receipt for an artifact
+    /// Identity precedence: `VM_ACTOR_DID` > (`VM_DID_WEB_DOMAIN` + `VM_OIDC_JWT`) > `VM_ACTOR_KEY_PATH`|~/.vaultmesh/actor.key
+    /// Docs: README/OPERATORS.md
+    Emit {
+        #[arg(long)]
+        kind: String,
+        /// Path to artifact to hash (BLAKE3)
+        #[arg(long)]
+        artifact: String,
+        /// Path to write provenance JSON (default: provenance.json)
+        #[arg(long, default_value = "provenance.json")]
+        provenance_out: String,
+        /// How to include provenance: embed|refer|braid (default: refer)
+        #[arg(long = "provenance", value_enum, default_value_t = ProvenanceMode::Refer)]
+        provenance_mode: ProvenanceMode,
+    },
+    /// Verify a glue receipt + optional OPA policy
+    /// Requires `opa` in PATH when policy is provided
+    Verify {
+        /// Path to receipt JSON
+        #[arg(long)]
+        receipt: String,
+        /// Path to policy file (rego)
+        #[arg(long, default_value = "policy/guard.rego")]
+        policy: String,
+        /// Action context for policy (e.g., plan/apply)
+        #[arg(long, default_value = "plan")]
+        action: String,
+    },
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, Debug, ValueEnum)]
+enum ProvenanceMode {
+    Embed,
+    Refer,
+    Braid,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -121,55 +177,114 @@ struct Receipt {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-struct Actor { id: String, cap: Vec<String>, sig: String }
+struct Actor {
+    id: String,
+    cap: Vec<String>,
+    sig: String,
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 struct Op {
-    kind: String, target: String,
-    #[serde(default)] risk: Option<String>,
-    #[serde(default)] change_window: Option<String>,
-    #[serde(default)] approvals: Vec<String>,
-    plan_hash: String, apply_hash: String,
+    kind: String,
+    target: String,
+    #[serde(default)]
+    risk: Option<String>,
+    #[serde(default)]
+    change_window: Option<String>,
+    #[serde(default)]
+    approvals: Vec<String>,
+    plan_hash: String,
+    apply_hash: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-struct Build { repo: String, commit: String, binary_hash: String }
+struct Build {
+    repo: String,
+    commit: String,
+    binary_hash: String,
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
-struct Env { #[serde(default)] ci: Option<String>, #[serde(default)] runner: Option<String>, #[serde(default)] tf_version: Option<String>, #[serde(default)] plugins: Option<Vec<String>> }
+struct Env {
+    #[serde(default)]
+    ci: Option<String>,
+    #[serde(default)]
+    runner: Option<String>,
+    #[serde(default)]
+    tf_version: Option<String>,
+    #[serde(default)]
+    plugins: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    entries: BTreeMap<String, String>,
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-struct Sign { alg: String, sig: String, pub_: String }
-impl Sign { fn none() -> Self { Self { alg: "none".into(), sig: "".into(), pub_: "".into() } } }
+struct Sign {
+    alg: String,
+    #[serde(rename = "sig")]
+    signature: String,
+    #[serde(rename = "pub")]
+    public_key: String,
+}
+impl Sign {
+    fn none() -> Self {
+        Self {
+            alg: "none".into(),
+            signature: String::new(),
+            public_key: String::new(),
+        }
+    }
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
-struct Merkle { date: String, path: Vec<String>, root: String }
+struct Merkle {
+    date: String,
+    path: Vec<String>,
+    root: String,
+}
 
 #[derive(Subcommand)]
 enum ReceiptCmd {
     /// Emit a pre-apply receipt from a Terraform plan JSON
     Emit {
-        #[arg(long)] kind: String,
-        #[arg(long)] target: String,
-        #[arg(long)] plan: String,
-        #[arg(long)] cap: String,
-        #[arg(long)] approve: String,
-        #[arg(long)] repo: String,
-        #[arg(long)] commit: String,
-        #[arg(long, default_value = "dev-binary")] binary_hash: String,
-        #[arg(long)] out: String,
+        #[arg(long)]
+        kind: String,
+        #[arg(long)]
+        target: String,
+        #[arg(long)]
+        plan: String,
+        #[arg(long)]
+        cap: String,
+        /// Accept multiple --approve flags and comma-delimited lists (alice,bob)
+        #[arg(long, value_delimiter = ',', action = clap::ArgAction::Append)]
+        approve: Vec<String>,
+        #[arg(long)]
+        repo: String,
+        #[arg(long)]
+        commit: String,
+        #[arg(long, default_value = "dev-binary")]
+        binary_hash: String,
+        #[arg(long)]
+        out: String,
     },
     /// Finalize a receipt with post-apply JSON
     Finalize {
-        #[arg(long)] receipt: String,
-        #[arg(long)] post: String,
-        #[arg(long)] out: String,
-    }
+        #[arg(long)]
+        receipt: String,
+        #[arg(long)]
+        post: String,
+        #[arg(long)]
+        out: String,
+    },
 }
 
 // ---------- Utility ----------
-fn read(path: &str) -> Result<Vec<u8>> { Ok(fs::read(path)?) }
-fn write(path: &str, s: &str) -> Result<()> { Ok(fs::write(path, s)?) }
+fn read(path: &str) -> Result<Vec<u8>> {
+    Ok(fs::read(path)?)
+}
+fn write(path: &str, s: &str) -> Result<()> {
+    Ok(fs::write(path, s)?)
+}
 fn blake3_hex(bytes: &[u8]) -> String {
     let mut h = Hasher::new();
     h.update(bytes);
@@ -177,14 +292,20 @@ fn blake3_hex(bytes: &[u8]) -> String {
 }
 
 fn hex_concat_ordered(a_hex: &str, b_hex: &str) -> Vec<u8> {
-    let (a, b) = if a_hex <= b_hex { (a_hex, b_hex) } else { (b_hex, a_hex) };
-    let mut bytes = Vec::with_capacity(a.len()/2 + b.len()/2);
+    let (a, b) = if a_hex <= b_hex {
+        (a_hex, b_hex)
+    } else {
+        (b_hex, a_hex)
+    };
+    let mut bytes = Vec::with_capacity(a.len() / 2 + b.len() / 2);
     bytes.extend(hex::decode(a).expect("hex decode a"));
     bytes.extend(hex::decode(b).expect("hex decode b"));
     bytes
 }
 
-fn to_value<T: Serialize>(t: &T) -> Value { serde_json::to_value(t).expect("serialize") }
+fn to_value<T: Serialize>(t: &T) -> Value {
+    serde_json::to_value(t).expect("serialize")
+}
 
 fn remove_leaf_and_merkle(mut v: Value) -> Value {
     if let Value::Object(ref mut m) = v {
@@ -215,7 +336,7 @@ fn sort_json(v: Value) -> Value {
             Value::Object(b.into_iter().collect())
         }
         Value::Array(arr) => Value::Array(arr.into_iter().map(sort_json).collect()),
-        _ => v
+        _ => v,
     }
 }
 
@@ -241,14 +362,33 @@ fn canonical_leaf_hex_legacy<T: Serialize>(t: &T) -> String {
     blake3_hex(canonical_payload_json_legacy(t).as_bytes())
 }
 
+fn blake3_file_hex(p: &std::path::Path) -> Result<String> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(p)?;
+    let mut hasher = blake3::Hasher::new();
+    let mut buf = [0u8; 8192];
+    loop {
+        let n = f.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hex::encode(hasher.finalize().as_bytes()))
+}
+
 // ---------- Merkle ----------
 fn build_merkle(leaves: &[String]) -> (String, HashMap<String, Vec<String>>) {
-    if leaves.is_empty() { return ("".into(), HashMap::new()); }
+    if leaves.is_empty() {
+        return (String::new(), HashMap::new());
+    }
     let mut layer = leaves.to_vec();
     let mut paths: HashMap<String, Vec<String>> = HashMap::new();
 
     // Initialize paths map
-    for l in &layer { paths.entry(l.clone()).or_default(); }
+    for l in &layer {
+        paths.entry(l.clone()).or_default();
+    }
 
     let mut next_layer;
     while layer.len() > 1 {
@@ -279,24 +419,91 @@ fn fold_path_to_root(leaf: &str, path: &[String]) -> String {
 }
 
 // ---------- Main ----------
+#[allow(clippy::too_many_lines)]
 fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let cli = Cli::parse();
     match cli.cmd {
         Cmd::Receipt { cmd } => match cmd {
-            ReceiptCmd::Emit { kind, target, plan, cap, approve, repo, commit, binary_hash, out } => {
+            ReceiptCmd::Emit {
+                kind,
+                target,
+                plan,
+                cap,
+                approve,
+                repo,
+                commit,
+                binary_hash,
+                out,
+            } => {
                 let plan_hash = blake3_hex(&read(&plan)?);
                 let id = ulid::Ulid::new().to_string();
                 let ts = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+
+                // Validate and normalize approvals
+                let approvals: Vec<String> = approve
+                    .into_iter()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                if approvals.is_empty() {
+                    return Err(anyhow!("receipt emit: at least one approval is required"));
+                }
+                if approvals.len() < 2 {
+                    eprintln!(
+                        "⚠️  Warning: strict mode verification requires ≥2 approvals (have {})",
+                        approvals.len()
+                    );
+                }
+
+                // Resolve actor DID dynamically
+                let actor_did = resolve_actor_did().unwrap_or_else(|e| {
+                    eprintln!("⚠️  Warning: failed to resolve actor DID: {}", e);
+                    "did:placeholder".to_string()
+                });
+
+                // Collect CI/CD environment metadata
+                let env_meta = collect_env_metadata();
+                let tf_version = env_meta.entries.get("terraform_version").cloned();
+
+                let env = Env {
+                    ci: env_meta.ci,
+                    runner: env_meta.runner,
+                    tf_version,
+                    plugins: None,
+                    entries: env_meta.entries,
+                };
+
                 let mut rec = Receipt {
-                    id, ts,
-                    actor: Actor { id: "did:placeholder".into(), cap: vec![cap], sig: "".into() },
-                    op: Op { kind, target, risk: None, change_window: None, approvals: vec![approve], plan_hash, apply_hash: "".into() },
-                    build: Build { repo, commit, binary_hash },
-                    env: Env::default(),
+                    id,
+                    ts,
+                    actor: Actor {
+                        id: actor_did,
+                        cap: vec![cap],
+                        sig: String::new(),
+                    },
+                    op: Op {
+                        kind,
+                        target,
+                        risk: None,
+                        change_window: None,
+                        approvals,
+                        plan_hash,
+                        apply_hash: String::new(),
+                    },
+                    build: Build {
+                        repo,
+                        commit,
+                        binary_hash,
+                    },
+                    env,
                     sign: Sign::none(),
-                    leaf: "".into(),
-                    merkle: Merkle { date: "".into(), path: vec![], root: "".into() },
+                    leaf: String::new(),
+                    merkle: Merkle {
+                        date: String::new(),
+                        path: vec![],
+                        root: String::new(),
+                    },
                 };
                 rec.leaf = canonical_leaf_hex(&rec);
                 write(&out, &serde_json::to_string_pretty(&rec)?)?;
@@ -315,7 +522,8 @@ fn main() -> Result<()> {
                 // generate from OS randomness without full rand crate
                 let mut seed = [0u8; 32];
                 getrandom::getrandom(&mut seed).map_err(|e| anyhow!("getrandom error: {}", e))?;
-                let secret = SecretKey::from_bytes(&seed).map_err(|e| anyhow!("secret key error: {}", e))?;
+                let secret =
+                    SecretKey::from_bytes(&seed).map_err(|e| anyhow!("secret key error: {}", e))?;
                 let public = PublicKey::from(&secret);
                 let kp = Keypair { secret, public };
                 let key_json = json!({
@@ -352,7 +560,12 @@ fn main() -> Result<()> {
             write(&out, &serde_json::to_string_pretty(&root_doc)?)?;
             println!("SEALED {}", out);
         }
-        Cmd::Anchor { receipt, dir, date, out } => {
+        Cmd::Anchor {
+            receipt,
+            dir,
+            date,
+            out,
+        } => {
             // Build tree to compute path for the given receipt
             let rec_bytes = read(&receipt)?;
             let mut rec: Receipt = serde_json::from_slice(&rec_bytes)?;
@@ -366,36 +579,60 @@ fn main() -> Result<()> {
             }
             leaves.sort();
             let (root, paths) = build_merkle(&leaves);
-            let path = paths.get(&rec.leaf).ok_or_else(|| anyhow!("leaf not found in set; ensure dir is the correct date"))?;
-            rec.merkle = Merkle { date, path: path.clone(), root: root.clone() };
+            let path = paths
+                .get(&rec.leaf)
+                .ok_or_else(|| anyhow!("leaf not found in set; ensure dir is the correct date"))?;
+            rec.merkle = Merkle {
+                date,
+                path: path.clone(),
+                root,
+            };
             write(&out, &serde_json::to_string_pretty(&rec)?)?;
             println!("ANCHORED {}", out);
         }
         Cmd::Sign { receipt, key, out } => {
             #[derive(Deserialize)]
-            struct KeyJson { alg: String, public: String, secret: String }
+            struct KeyJson {
+                alg: String,
+                public: String,
+                secret: String,
+            }
             let kj: KeyJson = serde_json::from_slice(&read(&key)?)?;
-            if kj.alg.to_lowercase() != "ed25519" { return Err(anyhow!("unsupported key alg: {}", kj.alg)); }
+            if kj.alg.to_lowercase() != "ed25519" {
+                return Err(anyhow!("unsupported key alg: {}", kj.alg));
+            }
             let pub_bytes = general_purpose::STANDARD
                 .decode(kj.public.as_bytes())
                 .map_err(|e| anyhow!("invalid public key b64: {}", e))?;
             let sec_bytes = general_purpose::STANDARD
                 .decode(kj.secret.as_bytes())
                 .map_err(|e| anyhow!("invalid secret key b64: {}", e))?;
-            let public = PublicKey::from_bytes(&pub_bytes).map_err(|e| anyhow!("bad public: {}", e))?;
-            let secret = SecretKey::from_bytes(&sec_bytes).map_err(|e| anyhow!("bad secret: {}", e))?;
+            let public =
+                PublicKey::from_bytes(&pub_bytes).map_err(|e| anyhow!("bad public: {}", e))?;
+            let secret =
+                SecretKey::from_bytes(&sec_bytes).map_err(|e| anyhow!("bad secret: {}", e))?;
             let kp = Keypair { secret, public };
 
             let mut rec: Receipt = serde_json::from_slice(&read(&receipt)?)?;
-            // ensure leaf reflects v2 canonicalization
-            rec.leaf = canonical_leaf_hex(&rec);
+            // populate signing metadata before canonicalizing
+            rec.sign = Sign {
+                alg: "ed25519".into(),
+                signature: String::new(),
+                public_key: general_purpose::STANDARD.encode(kp.public.as_bytes()),
+            };
             let msg = canonical_payload_json_v2(&rec);
             let sig: Signature = kp.sign(msg.as_bytes());
-            rec.sign = Sign { alg: "ed25519".into(), sig: general_purpose::STANDARD.encode(sig.to_bytes()), pub_: general_purpose::STANDARD.encode(kp.public.as_bytes()) };
+            rec.sign.signature = general_purpose::STANDARD.encode(sig.to_bytes());
+            // ensure leaf reflects signed payload
+            rec.leaf = canonical_leaf_hex(&rec);
             write(&out, &serde_json::to_string_pretty(&rec)?)?;
             println!("SIGNED {}", out);
         }
-        Cmd::Verify { receipt, root, strict } => {
+        Cmd::Verify {
+            receipt,
+            root,
+            strict,
+        } => {
             let rec: Receipt = serde_json::from_slice(&read(&receipt)?)?;
             let computed_leaf = canonical_leaf_hex(&rec);
             let mut legacy_ok = false;
@@ -409,32 +646,152 @@ fn main() -> Result<()> {
                 }
             }
             let root_doc: Value = serde_json::from_slice(&read(&root)?)?;
-            let root_hex = root_doc.get("root").and_then(|v| v.as_str()).ok_or_else(|| anyhow!("invalid root.json"))?;
+            let root_hex = root_doc
+                .get("root")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("invalid root.json"))?;
             let folded = fold_path_to_root(&rec.leaf, &rec.merkle.path);
             if folded != root_hex {
                 return Err(anyhow!("path->root mismatch"));
             }
             if strict {
-                if rec.actor.cap.is_empty() { return Err(anyhow!("strict: missing capability")); }
-                if rec.op.approvals.len() < 2 { return Err(anyhow!("strict: need >=2 approvals")); }
-                if rec.op.plan_hash.is_empty() || rec.op.apply_hash.is_empty() { return Err(anyhow!("strict: missing plan/apply hashes")); }
+                if rec.actor.cap.is_empty() {
+                    return Err(anyhow!("strict: missing capability"));
+                }
+                if rec.op.approvals.len() < 2 {
+                    return Err(anyhow!("strict: need >=2 approvals"));
+                }
+                if rec.op.plan_hash.is_empty() || rec.op.apply_hash.is_empty() {
+                    return Err(anyhow!("strict: missing plan/apply hashes"));
+                }
                 // Require ed25519 signature
-                if rec.sign.alg.to_lowercase() != "ed25519" || rec.sign.sig.is_empty() || rec.sign.pub_.is_empty() {
+                if rec.sign.alg.to_lowercase() != "ed25519"
+                    || rec.sign.signature.is_empty()
+                    || rec.sign.public_key.is_empty()
+                {
                     return Err(anyhow!("strict: missing ed25519 signature"));
                 }
                 let pub_bytes = general_purpose::STANDARD
-                    .decode(rec.sign.pub_.as_bytes())
+                    .decode(rec.sign.public_key.as_bytes())
                     .map_err(|e| anyhow!("strict: bad public b64: {}", e))?;
                 let sig_bytes = general_purpose::STANDARD
-                    .decode(rec.sign.sig.as_bytes())
+                    .decode(rec.sign.signature.as_bytes())
                     .map_err(|e| anyhow!("strict: bad signature b64: {}", e))?;
-                let pk = PublicKey::from_bytes(&pub_bytes).map_err(|e| anyhow!("strict: bad public: {}", e))?;
-                let sig = Signature::from_bytes(&sig_bytes).map_err(|e| anyhow!("strict: bad signature: {}", e))?;
-                let msg = if legacy_ok { canonical_payload_json_legacy(&rec) } else { canonical_payload_json_v2(&rec) };
-                pk.verify(msg.as_bytes(), &sig).map_err(|_| anyhow!("strict: signature verification failed"))?;
+                let pk = PublicKey::from_bytes(&pub_bytes)
+                    .map_err(|e| anyhow!("strict: bad public: {}", e))?;
+                let sig = Signature::from_bytes(&sig_bytes)
+                    .map_err(|e| anyhow!("strict: bad signature: {}", e))?;
+                let msg = if legacy_ok {
+                    canonical_payload_json_legacy(&rec)
+                } else {
+                    canonical_payload_json_v2(&rec)
+                };
+                pk.verify(msg.as_bytes(), &sig)
+                    .map_err(|_| anyhow!("strict: signature verification failed"))?;
             }
             println!("VERIFIED ✅");
         }
+        Cmd::Glue { cmd } => match cmd {
+            GlueCmd::Emit {
+                kind,
+                artifact,
+                provenance_out,
+                provenance_mode,
+            } => {
+                // load actor keypair
+                let kp = identity::load_actor_keypair()?;
+                // subject digest
+                let digest = blake3_file_hex(std::path::Path::new(&artifact))?;
+                let subject = receipt::Subject {
+                    kind,
+                    digest: digest.clone(),
+                    meta: None,
+                };
+                let r_base = receipt::build_receipt(subject)?;
+                let prov = receipt::build_provenance(
+                    std::path::Path::new(&artifact),
+                    &digest,
+                    &r_base.actor,
+                    &r_base.env,
+                );
+                std::fs::write(&provenance_out, serde_json::to_vec_pretty(&prov)?)?;
+
+                match provenance_mode {
+                    ProvenanceMode::Embed => {
+                        let mut r = r_base;
+                        r.provenance = Some(prov);
+                        let signed = receipt::sign_receipt(r, &kp)?;
+                        println!("{}", serde_json::to_string_pretty(&signed)?);
+                    }
+                    ProvenanceMode::Refer | ProvenanceMode::Braid => {
+                        let prov_bytes = receipt::canonical_json_bytes(&prov);
+                        let prov_hex = receipt::blake3_hex(&prov_bytes);
+                        let mut r = r_base;
+                        r.provenance_ref = Some(receipt::ProvenanceRef {
+                            path: provenance_out.clone(),
+                            digest: prov_hex,
+                        });
+                        let signed = receipt::sign_receipt(r, &kp)?;
+                        let json_signed = serde_json::to_string_pretty(&signed)?;
+                        println!("{}", json_signed);
+                        if matches!(provenance_mode, ProvenanceMode::Braid) {
+                            let rcpt_hex = receipt::blake3_hex(json_signed.as_bytes());
+                            // rewrite provenance with receipt_digest included
+                            let mut prov_val = serde_json::to_value(prov)?;
+                            if let serde_json::Value::Object(ref mut m) = prov_val {
+                                m.insert(
+                                    "receipt_digest".into(),
+                                    serde_json::Value::String(rcpt_hex),
+                                );
+                            }
+                            std::fs::write(&provenance_out, serde_json::to_vec_pretty(&prov_val)?)?;
+                        }
+                    }
+                }
+            }
+            GlueCmd::Verify {
+                receipt,
+                policy,
+                action,
+            } => {
+                let data: serde_json::Value = serde_json::from_slice(&read(&receipt)?)?;
+                let r: receipt::Receipt = serde_json::from_value(data.clone())?;
+                receipt::verify_receipt(&r)?;
+                // Run OPA if available
+                let mut input = data;
+                if let serde_json::Value::Object(ref mut m) = input {
+                    m.insert("action".into(), serde_json::Value::String(action));
+                }
+                use std::io::Write as _;
+                let mut child = std::process::Command::new("opa")
+                    .args([
+                        "eval",
+                        "-f",
+                        "pretty",
+                        "-I",
+                        "-i",
+                        "-",
+                        "-d",
+                        &policy,
+                        "data.vaultmesh.guard",
+                    ])
+                    .stdin(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::inherit())
+                    .stderr(std::process::Stdio::inherit())
+                    .spawn()
+                    .map_err(|e| anyhow!("failed to spawn opa: {e}"))?;
+                child
+                    .stdin
+                    .as_mut()
+                    .ok_or_else(|| anyhow!("opa stdin unavailable"))?
+                    .write_all(serde_json::to_string(&input)?.as_bytes())?;
+                let status = child.wait()?;
+                if !status.success() {
+                    return Err(anyhow!("policy evaluation failed"));
+                }
+                println!("OPA ✅");
+            }
+        },
     }
     Ok(())
 }
