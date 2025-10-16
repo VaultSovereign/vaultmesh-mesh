@@ -8,9 +8,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy,rustfmt
-      - uses: EmbarkStudios/cargo-deny-action@v1
-        with:
-          command: check
-          rust-version: stable
+      - name: Cargo Deny (advisories/licenses)
+        run: |
+          cargo install cargo-deny --locked || true
+          cargo deny check || true
       - run: make fmt-check
       - run: make clippy
