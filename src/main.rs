@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
+use std::io::Write;
 
 #[derive(Parser)]
 #[command(
@@ -762,7 +763,6 @@ fn main() -> Result<()> {
                 if let serde_json::Value::Object(ref mut m) = input {
                     m.insert("action".into(), serde_json::Value::String(action));
                 }
-                use std::io::Write as _;
                 let mut child = std::process::Command::new("opa")
                     .args([
                         "eval",
