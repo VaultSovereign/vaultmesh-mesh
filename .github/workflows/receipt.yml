@@ -1,0 +1,67 @@
+name: VaultMesh Proof Bundle
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  vm-proof:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Lint gates
+        run: |
+          cargo fmt --all -- --check
+          make clippy
+          cargo deny check || true
+
+      - name: Emit receipt (artifact = vaultmesh binary)
+        env:
+          VM_ACTOR_DID: ${{ secrets.VM_ACTOR_DID }}
+          VM_DID_WEB_DOMAIN: ${{ vars.VM_DID_WEB_DOMAIN }}
+          VM_OIDC_JWT: ${{ secrets.VM_OIDC_JWT }}
+          VM_ACTOR_KEY_PATH: ${{ secrets.VM_ACTOR_KEY_PATH }}
+          VM_TF_VERSION: ${{ vars.VM_TF_VERSION }}
+        run: |
+          ART=target/release/vaultmesh
+          echo "Hashing artifact: $ART"
+          target/release/vaultmesh glue emit --kind artifact --artifact "$ART" --provenance-out provenance.json > receipt.json
+          jq . receipt.json | head -n 40
+          test -f provenance.json && jq . provenance.json | head -n 30 || true
+
+      - name: Install OPA
+        run: |
+          curl -L -o opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64_static
+          chmod +x opa
+          sudo mv opa /usr/local/bin/opa
+
+      - name: Verify signature + policy
+        run: |
+          target/release/vaultmesh glue verify \
+            --receipt receipt.json \
+            --policy policy/guard.rego \
+            --action apply
+
+      - name: Generate SBOM (CycloneDX)
+        run: |
+          cargo install cyclonedx-bom --locked || true
+          cyclonedx-bom -o sbom.json
+
+      - name: Upload proof bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: vm-proof-bundle
+          path: |
+            receipt.json
+            provenance.json
+            sbom.json
+            policy/guard.rego
+
