@@ -11,7 +11,7 @@ pub struct EnvMetadata {
 
 // NOTE: This function aggregates many CI adapters and is expected to be long.
 // We keep a single entrypoint for stable receipt shape. Refactors planned.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, clippy::must_use_candidate)]
 pub fn collect_env_metadata() -> EnvMetadata {
     let mut meta = EnvMetadata::default();
 
@@ -193,6 +193,7 @@ pub fn collect_env_metadata() -> EnvMetadata {
     meta
 }
 
+#[allow(clippy::must_use_candidate)]
 pub fn detect_terraform_version() -> Option<String> {
     if let Some(v) = env_var("VM_TF_VERSION") {
         return Some(v);

@@ -4,10 +4,12 @@
 
 mod env_meta;
 mod identity;
-mod receipt;
+pub mod receipt;
+pub mod schema;
 
 use crate::env_meta::collect_env_metadata;
 use crate::identity::resolve_actor_did;
+use crate::schema::{validate_provenance, validate_receipt as validate_receipt_schema};
 use anyhow::{anyhow, Result};
 use base64::{engine::general_purpose, Engine as _};
 use blake3::Hasher;
@@ -16,6 +18,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signature, Signer, Verifier};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::io::Write as _;
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 
@@ -102,6 +105,16 @@ enum Cmd {
         #[command(subcommand)]
         cmd: GlueCmd,
     },
+    /// Ledger operations (content-addressed store)
+    Ledger {
+        #[command(subcommand)]
+        cmd: LedgerCmd,
+    },
+    /// Sync operations (placeholder)
+    Sync {
+        #[command(subcommand)]
+        cmd: SyncCmd,
+    },
 }
 
 #[derive(Subcommand)]
@@ -154,6 +167,24 @@ enum GlueCmd {
         #[arg(long, default_value = "plan")]
         action: String,
     },
+}
+
+#[derive(Subcommand)]
+enum LedgerCmd {
+    /// Add one or more JSON files to the local ledger (~/.vaultmesh/ledger)
+    Add {
+        /// Files to add (receipt/provenance JSON)
+        #[arg(required = true)]
+        files: Vec<String>,
+    },
+    /// List entries in the local ledger
+    Ls,
+}
+
+#[derive(Subcommand)]
+enum SyncCmd {
+    /// Placeholder: pulls from URL (pending verification)
+    Pull { url: String },
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug, ValueEnum)]
@@ -714,12 +745,16 @@ fn main() -> Result<()> {
                     &r_base.actor,
                     &r_base.env,
                 );
+                // Schema validate provenance before writing
+                validate_provenance(&serde_json::to_value(&prov)?)?;
                 std::fs::write(&provenance_out, serde_json::to_vec_pretty(&prov)?)?;
 
                 match provenance_mode {
                     ProvenanceMode::Embed => {
                         let mut r = r_base;
                         r.provenance = Some(prov);
+                        // Schema validate receipt prior to signing
+                        validate_receipt_schema(&serde_json::to_value(&r)?)?;
                         let signed = receipt::sign_receipt(r, &kp)?;
                         println!("{}", serde_json::to_string_pretty(&signed)?);
                     }
@@ -731,6 +766,7 @@ fn main() -> Result<()> {
                             path: provenance_out.clone(),
                             digest: prov_hex,
                         });
+                        validate_receipt_schema(&serde_json::to_value(&r)?)?;
                         let signed = receipt::sign_receipt(r, &kp)?;
                         let json_signed = serde_json::to_string_pretty(&signed)?;
                         println!("{}", json_signed);
@@ -744,6 +780,7 @@ fn main() -> Result<()> {
                                     serde_json::Value::String(rcpt_hex),
                                 );
                             }
+                            validate_provenance(&prov_val)?;
                             std::fs::write(&provenance_out, serde_json::to_vec_pretty(&prov_val)?)?;
                         }
                     }
@@ -755,6 +792,8 @@ fn main() -> Result<()> {
                 action,
             } => {
                 let data: serde_json::Value = serde_json::from_slice(&read(&receipt)?)?;
+                // Schema validate incoming receipt JSON
+                validate_receipt_schema(&data)?;
                 let r: receipt::Receipt = serde_json::from_value(data.clone())?;
                 receipt::verify_receipt(&r)?;
                 // Run OPA if available
@@ -762,7 +801,6 @@ fn main() -> Result<()> {
                 if let serde_json::Value::Object(ref mut m) = input {
                     m.insert("action".into(), serde_json::Value::String(action));
                 }
-                use std::io::Write as _;
                 let mut child = std::process::Command::new("opa")
                     .args([
                         "eval",
@@ -790,6 +828,45 @@ fn main() -> Result<()> {
                     return Err(anyhow!("policy evaluation failed"));
                 }
                 println!("OPA ✅");
+            }
+        },
+        Cmd::Ledger { cmd } => match cmd {
+            LedgerCmd::Add { files } => {
+                let home = dirs::home_dir().ok_or_else(|| anyhow!("no home dir"))?;
+                let dir = home.join(".vaultmesh").join("ledger");
+                std::fs::create_dir_all(&dir)?;
+                for f in files {
+                    let bytes = read(&f)?;
+                    // try parse to decide receipt/provenance and validate
+                    if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                        let ok = validate_receipt_schema(&v).is_ok() || validate_provenance(&v).is_ok();
+                        if !ok {
+                            return Err(anyhow!("{}: not a valid receipt/provenance", f));
+                        }
+                    }
+                    let digest = blake3_hex(&bytes);
+                    let path = dir.join(format!("{digest}.json"));
+                    std::fs::write(&path, &bytes)?;
+                    println!("{}  {}", digest, f);
+                }
+            }
+            LedgerCmd::Ls => {
+                let home = dirs::home_dir().ok_or_else(|| anyhow!("no home dir"))?;
+                let dir = home.join(".vaultmesh").join("ledger");
+                if !dir.exists() {
+                    return Ok(());
+                }
+                let mut entries: Vec<_> = std::fs::read_dir(&dir)?.collect::<Result<_, _>>()?;
+                entries.sort_by_key(std::fs::DirEntry::file_name);
+                for e in entries {
+                    let name = e.file_name().to_string_lossy().to_string();
+                    println!("{}", name);
+                }
+            }
+        },
+        Cmd::Sync { cmd } => match cmd {
+            SyncCmd::Pull { url } => {
+                println!("sync pull {} → pending verification", url);
             }
         },
     }

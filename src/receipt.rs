@@ -1,3 +1,8 @@
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate
+)]
 use crate::env_meta::collect_env_metadata;
 use crate::identity::resolve_actor_did;
 use anyhow::{anyhow, Result};
@@ -62,6 +67,7 @@ pub fn build_receipt(subject: Subject) -> Result<Receipt> {
     })
 }
 
+#[must_use]
 pub fn hash_canonical(json: &Value) -> String {
     // stable: serde_json already orders BTreeMap deterministically; re-serialize and hash
     let mut hasher = Hasher::new();
@@ -144,6 +150,7 @@ pub struct TsInfo {
     pub built: String, // RFC3339
 }
 
+#[must_use]
 pub fn build_provenance(
     artifact_path: &Path,
     artifact_hash_hex: &str,
@@ -194,6 +201,7 @@ pub fn canonical_json_bytes<T: Serialize>(v: &T) -> Vec<u8> {
     serde_json::to_vec(v).expect("serialize")
 }
 
+#[must_use]
 pub fn blake3_hex(data: &[u8]) -> String {
     let mut h = Hasher::new();
     h.update(data);

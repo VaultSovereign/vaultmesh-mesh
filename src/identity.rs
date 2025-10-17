@@ -54,6 +54,7 @@ struct ActorKeyFile {
     did: Option<String>,
 }
 
+#[allow(clippy::missing_errors_doc)]
 pub fn resolve_actor_did() -> Result<String> {
     if let Some(env_did) = env::var("VM_ACTOR_DID").ok().and_then(non_empty_trimmed) {
         return Ok(env_did);
@@ -154,6 +155,7 @@ fn ensure_local_did_key() -> Result<String> {
     Ok(did_str)
 }
 
+#[allow(clippy::missing_errors_doc)]
 pub fn load_actor_keypair() -> Result<Keypair> {
     let path = actor_key_path()?;
     // Ensure file exists (creates if missing)
