@@ -7,4 +7,4 @@ on:
 
 jobs:
   call:
-    uses: VaultSovereign/Vm-umbrella/.github/workflows/shared-lint.yml@main
+    uses: VaultSovereign/Vm-umbrella/.github/workflows/shared-lint.yml@v0.2.0
