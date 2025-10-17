@@ -25,3 +25,10 @@ bs58 = "0.4"
 percent-encoding = "2"
 zeroize = "1"
 jsonschema = "0.17"
+axum = "0.7"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+ureq = "2"
+
+[dev-dependencies]
+serde_json = "1"
+tempfile = "3"
