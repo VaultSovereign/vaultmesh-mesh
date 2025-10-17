@@ -1,0 +1,9 @@
+name: reuse-shared-release
+on:
+  push:
+    branches: [ main, develop ]
+  workflow_dispatch: {}
+
+jobs:
+  call:
+    uses: VaultSovereign/Vm-umbrella/.github/workflows/shared-release.yml@main
