@@ -1,0 +1,10 @@
+name: reuse-shared-lint
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request: {}
+  workflow_dispatch: {}
+
+jobs:
+  call:
+    uses: VaultSovereign/Vm-umbrella/.github/workflows/shared-lint.yml@main
