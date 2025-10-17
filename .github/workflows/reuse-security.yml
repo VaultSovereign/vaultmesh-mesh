@@ -1,0 +1,7 @@
+name: reuse-shared-security
+on:
+  schedule: [{ cron: "0 2 * * 1" }]
+  workflow_dispatch: {}
+jobs:
+  call:
+    uses: VaultSovereign/Vm-umbrella/.github/workflows/shared-security.yml@v0.3.0
