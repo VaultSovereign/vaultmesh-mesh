@@ -1,3 +1,5 @@
+[![CI](https://github.com/VaultSovereign/vaultmesh-mesh/actions/workflows/reuse.yml/badge.svg)](https://github.com/VaultSovereign/vaultmesh-mesh/actions)
+
 # vaultmesh (CLI)
 
 Implements:
