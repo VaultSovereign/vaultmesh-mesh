@@ -6,6 +6,9 @@ mod env_meta;
 mod identity;
 pub mod receipt;
 pub mod schema;
+mod ledger;
+mod gateway;
+mod sync;
 
 use crate::env_meta::collect_env_metadata;
 use crate::identity::resolve_actor_did;
@@ -110,7 +113,13 @@ enum Cmd {
         #[command(subcommand)]
         cmd: LedgerCmd,
     },
-    /// Sync operations (placeholder)
+    /// Serve the Ledger Gateway (HTTP)
+    Gateway {
+        /// Address to bind, e.g., 127.0.0.1:8080
+        #[arg(long, default_value = "127.0.0.1:8080")]
+        addr: String,
+    },
+    /// Peer synchronization
     Sync {
         #[command(subcommand)]
         cmd: SyncCmd,
@@ -183,8 +192,12 @@ enum LedgerCmd {
 
 #[derive(Subcommand)]
 enum SyncCmd {
-    /// Placeholder: pulls from URL (pending verification)
+    /// Pull a receipt bundle from a URL (existing stub may be present)
     Pull { url: String },
+    /// Push a local bundle to a peer for verification and ingestion
+    Push { url: String, #[arg(long)] receipt: String, #[arg(long)] provenance: String },
+    /// Ask a peer to return a stored receipt by digest and verify it locally
+    Verify { url: String, #[arg(long)] digest: String },
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug, ValueEnum)]
@@ -864,9 +877,52 @@ fn main() -> Result<()> {
                 }
             }
         },
+        Cmd::Gateway { addr } => {
+            // Launch async gateway without #[tokio::main]
+            let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+            rt.block_on(crate::gateway::run(&addr))?;
+        }
         Cmd::Sync { cmd } => match cmd {
             SyncCmd::Pull { url } => {
-                println!("sync pull {} → pending verification", url);
+                // Minimal: fetch receipt JSON and verify
+                let body = ureq::get(&url).call()?.into_string()?;
+                let v: serde_json::Value = serde_json::from_str(&body)?;
+                crate::schema::validate_receipt(&v)?;
+                let rcpt: crate::receipt::Receipt = serde_json::from_value(v.clone())?;
+                crate::receipt::verify_receipt(&rcpt)?;
+                let commit = rcpt.env.get("git_commit").cloned();
+                let rref = rcpt.env.get("git_ref").cloned();
+                let d = crate::ledger::add_json("receipt", body.as_bytes(), commit, rref)?;
+                println!("pulled and verified receipt: {}", d);
+            }
+            SyncCmd::Push { url, receipt, provenance } => {
+                let mut base = url.trim_end_matches('/').to_string();
+                if !base.ends_with("/v1") { base.push_str("/v1"); }
+                let verify_url = format!("{}/verify", base);
+                let r_bytes = std::fs::read(&receipt)?;
+                let p_bytes = std::fs::read(&provenance)?;
+                let r_json: serde_json::Value = serde_json::from_slice(&r_bytes)?;
+                let p_json: serde_json::Value = serde_json::from_slice(&p_bytes)?;
+                crate::schema::validate_receipt(&r_json)?;
+                crate::schema::validate_provenance(&p_json)?;
+                let payload = serde_json::json!({ "receipt": r_json, "provenance": p_json });
+                let resp = ureq::post(&verify_url)
+                    .timeout(std::time::Duration::from_secs(20))
+                    .set("content-type", "application/json")
+                    .send_string(&payload.to_string())?;
+                let resp_text = resp.into_string()?;
+                println!("{}", resp_text);
+            }
+            SyncCmd::Verify { url, digest } => {
+                let mut base = url.trim_end_matches('/').to_string();
+                if !base.ends_with("/v1") { base.push_str("/v1"); }
+                let get_url = format!("{}/ledger/{}", base, digest);
+                let body = ureq::get(&get_url).call()?.into_string()?;
+                let v: serde_json::Value = serde_json::from_str(&body)?;
+                crate::schema::validate_receipt(&v)?;
+                let rcpt: crate::receipt::Receipt = serde_json::from_value(v)?;
+                crate::receipt::verify_receipt(&rcpt)?;
+                println!("verified receipt from peer: {}", digest);
             }
         },
     }
