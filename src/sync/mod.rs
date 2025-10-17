@@ -1,5 +1,7 @@
 use blake3::Hasher;
 
+pub mod policy;
+
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub enum TrustLevel {
     Full,
