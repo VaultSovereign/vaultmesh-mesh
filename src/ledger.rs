@@ -19,6 +19,10 @@ fn ledger_dir() -> Result<std::path::PathBuf> {
     Ok(dir)
 }
 
+/// Persist a JSON payload (receipt or provenance) into the ledger directory.
+///
+/// # Errors
+/// Returns an error when the ledger directory cannot be created or the write fails.
 pub fn add_json(
     _kind_hint: &str,
     bytes: &[u8],
@@ -31,12 +35,20 @@ pub fn add_json(
     Ok(digest)
 }
 
+/// Fetch a stored JSON payload by digest.
+///
+/// # Errors
+/// Returns an error when the digest is unknown or reading from disk fails.
 pub fn get_json(digest: &str) -> Result<Vec<u8>> {
     let path = ledger_dir()?.join(format!("{digest}.json"));
     let data = std::fs::read(&path)?;
     Ok(data)
 }
 
+/// List all entries currently stored in the ledger directory.
+///
+/// # Errors
+/// Returns an error when the directory cannot be read.
 pub fn list() -> Result<Vec<Entry>> {
     let dir = ledger_dir()?;
     if !dir.exists() {
@@ -46,7 +58,12 @@ pub fn list() -> Result<Vec<Entry>> {
     for ent in std::fs::read_dir(&dir)? {
         let ent = ent?;
         let name = ent.file_name().to_string_lossy().to_string();
-        if !name.ends_with(".json") { continue; }
+        if !std::path::Path::new(&name)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
+        {
+            continue;
+        }
         let digest = name.trim_end_matches(".json").to_string();
         let bytes = std::fs::read(ent.path())?;
         let kind = classify(&bytes);

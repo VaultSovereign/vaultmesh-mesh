@@ -21,6 +21,7 @@ pub struct PeerReceiptBundle {
 }
 
 /// Extremely simple integrity fold over digests (upgradeable later).
+#[must_use]
 pub fn merkle_root(digests: &[String]) -> String {
     let mut h = Hasher::new();
     for d in digests {
@@ -28,4 +29,3 @@ pub fn merkle_root(digests: &[String]) -> String {
     }
     hex::encode(h.finalize().as_bytes())
 }
-

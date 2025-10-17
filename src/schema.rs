@@ -1,4 +1,8 @@
-#![allow(clippy::missing_errors_doc, clippy::explicit_auto_deref, clippy::non_std_lazy_statics)]
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::explicit_auto_deref,
+    clippy::non_std_lazy_statics
+)]
 use anyhow::{anyhow, Result};
 use jsonschema::{Draft, JSONSchema};
 use serde_json::json;
@@ -47,7 +51,9 @@ pub static PROVENANCE_SCHEMA: std::sync::LazyLock<Value> = std::sync::LazyLock::
 });
 
 pub fn validate_receipt(v: &Value) -> Result<()> {
-    let compiled = JSONSchema::options().with_draft(Draft::Draft7).compile(&*RECEIPT_SCHEMA)
+    let compiled = JSONSchema::options()
+        .with_draft(Draft::Draft7)
+        .compile(&*RECEIPT_SCHEMA)
         .map_err(|e| anyhow!("invalid receipt schema: {e}"))?;
     if let Err(errs) = compiled.validate(v) {
         let mut msgs = Vec::new();
@@ -60,7 +66,9 @@ pub fn validate_receipt(v: &Value) -> Result<()> {
 }
 
 pub fn validate_provenance(v: &Value) -> Result<()> {
-    let compiled = JSONSchema::options().with_draft(Draft::Draft7).compile(&*PROVENANCE_SCHEMA)
+    let compiled = JSONSchema::options()
+        .with_draft(Draft::Draft7)
+        .compile(&*PROVENANCE_SCHEMA)
         .map_err(|e| anyhow!("invalid provenance schema: {e}"))?;
     if let Err(errs) = compiled.validate(v) {
         let mut msgs = Vec::new();
@@ -71,5 +79,3 @@ pub fn validate_provenance(v: &Value) -> Result<()> {
     }
     Ok(())
 }
-
-

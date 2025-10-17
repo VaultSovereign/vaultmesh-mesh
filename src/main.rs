@@ -2,17 +2,6 @@
 // Scope the allows to this file only—core libs remain strict.
 #![allow(clippy::similar_names, clippy::uninlined_format_args)]
 
-mod env_meta;
-mod identity;
-pub mod receipt;
-pub mod schema;
-mod ledger;
-mod gateway;
-mod sync;
-
-use crate::env_meta::collect_env_metadata;
-use crate::identity::resolve_actor_did;
-use crate::schema::{validate_provenance, validate_receipt as validate_receipt_schema};
 use anyhow::{anyhow, Result};
 use base64::{engine::general_purpose, Engine as _};
 use blake3::Hasher;
@@ -21,9 +10,15 @@ use clap::{Parser, Subcommand, ValueEnum};
 use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signature, Signer, Verifier};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::io::Write as _;
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
+use std::io::Write as _;
+use vaultmesh::env_meta::collect_env_metadata;
+use vaultmesh::gateway;
+use vaultmesh::identity::{self, resolve_actor_did};
+use vaultmesh::ledger;
+use vaultmesh::receipt;
+use vaultmesh::schema::{self, validate_provenance, validate_receipt as validate_receipt_schema};
 
 #[derive(Parser)]
 #[command(
@@ -195,9 +190,19 @@ enum SyncCmd {
     /// Pull a receipt bundle from a URL (existing stub may be present)
     Pull { url: String },
     /// Push a local bundle to a peer for verification and ingestion
-    Push { url: String, #[arg(long)] receipt: String, #[arg(long)] provenance: String },
+    Push {
+        url: String,
+        #[arg(long)]
+        receipt: String,
+        #[arg(long)]
+        provenance: String,
+    },
     /// Ask a peer to return a stored receipt by digest and verify it locally
-    Verify { url: String, #[arg(long)] digest: String },
+    Verify {
+        url: String,
+        #[arg(long)]
+        digest: String,
+    },
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug, ValueEnum)]
@@ -852,7 +857,8 @@ fn main() -> Result<()> {
                     let bytes = read(&f)?;
                     // try parse to decide receipt/provenance and validate
                     if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) {
-                        let ok = validate_receipt_schema(&v).is_ok() || validate_provenance(&v).is_ok();
+                        let ok =
+                            validate_receipt_schema(&v).is_ok() || validate_provenance(&v).is_ok();
                         if !ok {
                             return Err(anyhow!("{}: not a valid receipt/provenance", f));
                         }
@@ -879,32 +885,40 @@ fn main() -> Result<()> {
         },
         Cmd::Gateway { addr } => {
             // Launch async gateway without #[tokio::main]
-            let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
-            rt.block_on(crate::gateway::run(&addr))?;
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()?;
+            rt.block_on(gateway::run(&addr))?;
         }
         Cmd::Sync { cmd } => match cmd {
             SyncCmd::Pull { url } => {
                 // Minimal: fetch receipt JSON and verify
                 let body = ureq::get(&url).call()?.into_string()?;
                 let v: serde_json::Value = serde_json::from_str(&body)?;
-                crate::schema::validate_receipt(&v)?;
-                let rcpt: crate::receipt::Receipt = serde_json::from_value(v.clone())?;
-                crate::receipt::verify_receipt(&rcpt)?;
+                schema::validate_receipt(&v)?;
+                let rcpt: receipt::Receipt = serde_json::from_value(v)?;
+                receipt::verify_receipt(&rcpt)?;
                 let commit = rcpt.env.get("git_commit").cloned();
                 let rref = rcpt.env.get("git_ref").cloned();
-                let d = crate::ledger::add_json("receipt", body.as_bytes(), commit, rref)?;
+                let d = ledger::add_json("receipt", body.as_bytes(), commit, rref)?;
                 println!("pulled and verified receipt: {}", d);
             }
-            SyncCmd::Push { url, receipt, provenance } => {
+            SyncCmd::Push {
+                url,
+                receipt,
+                provenance,
+            } => {
                 let mut base = url.trim_end_matches('/').to_string();
-                if !base.ends_with("/v1") { base.push_str("/v1"); }
+                if !base.ends_with("/v1") {
+                    base.push_str("/v1");
+                }
                 let verify_url = format!("{}/verify", base);
                 let r_bytes = std::fs::read(&receipt)?;
                 let p_bytes = std::fs::read(&provenance)?;
                 let r_json: serde_json::Value = serde_json::from_slice(&r_bytes)?;
                 let p_json: serde_json::Value = serde_json::from_slice(&p_bytes)?;
-                crate::schema::validate_receipt(&r_json)?;
-                crate::schema::validate_provenance(&p_json)?;
+                schema::validate_receipt(&r_json)?;
+                schema::validate_provenance(&p_json)?;
                 let payload = serde_json::json!({ "receipt": r_json, "provenance": p_json });
                 let resp = ureq::post(&verify_url)
                     .timeout(std::time::Duration::from_secs(20))
@@ -915,13 +929,15 @@ fn main() -> Result<()> {
             }
             SyncCmd::Verify { url, digest } => {
                 let mut base = url.trim_end_matches('/').to_string();
-                if !base.ends_with("/v1") { base.push_str("/v1"); }
+                if !base.ends_with("/v1") {
+                    base.push_str("/v1");
+                }
                 let get_url = format!("{}/ledger/{}", base, digest);
                 let body = ureq::get(&get_url).call()?.into_string()?;
                 let v: serde_json::Value = serde_json::from_str(&body)?;
-                crate::schema::validate_receipt(&v)?;
-                let rcpt: crate::receipt::Receipt = serde_json::from_value(v)?;
-                crate::receipt::verify_receipt(&rcpt)?;
+                schema::validate_receipt(&v)?;
+                let rcpt: receipt::Receipt = serde_json::from_value(v)?;
+                receipt::verify_receipt(&rcpt)?;
                 println!("verified receipt from peer: {}", digest);
             }
         },

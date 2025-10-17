@@ -19,4 +19,3 @@ fn merkle_root_is_stable_and_order_independent() {
     assert_eq!(r1, r2);
     assert!(!r1.is_empty());
 }
-

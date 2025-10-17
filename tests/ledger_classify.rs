@@ -41,4 +41,3 @@ fn classify_receipt_and_provenance() {
     assert!(kinds.contains(&"receipt"));
     assert!(kinds.contains(&"provenance"));
 }
-

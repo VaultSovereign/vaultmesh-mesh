@@ -73,5 +73,3 @@ fn canonical_hash_is_stable() {
     let db = receipt::hash_canonical(&b);
     assert_eq!(da, db, "canonical hash must ignore key order differences");
 }
-
-

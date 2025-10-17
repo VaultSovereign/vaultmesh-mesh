@@ -11,29 +11,48 @@ use crate::receipt;
 use crate::schema;
 use crate::sync::merkle_root;
 
-pub async fn health() -> &'static str { "ok" }
+pub async fn health() -> &'static str {
+    "ok"
+}
 
+/// Return stored receipt JSON by digest.
+///
+/// # Errors
+/// Returns an error when the digest is unknown or underlying storage read fails.
 pub async fn get_receipt(Path(digest): Path<String>) -> Result<String, (StatusCode, String)> {
     let data = ledger::get_json(&digest).map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
     Ok(String::from_utf8_lossy(&data).into_owned())
 }
 
-/// POST /v1/verify
-/// body: { receipt: Receipt, provenance: Provenance }
+/// Ingest and verify a receipt/provenance bundle pushed by a peer.
+///
+/// # Errors
+/// Returns an error when the bundle is malformed, signature validation fails,
+/// or the ledger cannot persist the data.
 pub async fn post_verify(Json(body): Json<Value>) -> Result<Json<Value>, (StatusCode, String)> {
-    let r_val = body.get("receipt").cloned().ok_or((StatusCode::BAD_REQUEST, "missing receipt".to_string()))?;
-    let p_val = body.get("provenance").cloned().ok_or((StatusCode::BAD_REQUEST, "missing provenance".to_string()))?;
+    let r_val = body
+        .get("receipt")
+        .cloned()
+        .ok_or_else(|| (StatusCode::BAD_REQUEST, "missing receipt".to_string()))?;
+    let p_val = body
+        .get("provenance")
+        .cloned()
+        .ok_or_else(|| (StatusCode::BAD_REQUEST, "missing provenance".to_string()))?;
 
     schema::validate_receipt(&r_val).map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
     schema::validate_provenance(&p_val).map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
 
-    let rcpt: crate::receipt::Receipt = serde_json::from_value(r_val.clone()).map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
-    receipt::verify_receipt(&rcpt).map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()))?;
+    let rcpt: receipt::Receipt = serde_json::from_value(r_val.clone())
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    receipt::verify_receipt(&rcpt)
+        .map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()))?;
 
     let commit = rcpt.env.get("git_commit").cloned();
     let git_ref = rcpt.env.get("git_ref").cloned();
-    let r_bytes = serde_json::to_vec(&r_val).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let p_bytes = serde_json::to_vec(&p_val).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let r_bytes = serde_json::to_vec(&r_val)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let p_bytes = serde_json::to_vec(&p_val)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let receipt_digest = ledger::add_json("receipt", &r_bytes, commit, git_ref)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -56,6 +75,10 @@ pub async fn post_verify(Json(body): Json<Value>) -> Result<Json<Value>, (Status
     })))
 }
 
+/// Launch the HTTP gateway on the provided socket address.
+///
+/// # Errors
+/// Returns an error when the listener fails to bind or the server terminates unexpectedly.
 pub async fn run(addr: &str) -> anyhow::Result<()> {
     let app = Router::new()
         .route("/v1/health", get(health))
